@@ -7,6 +7,7 @@ use App\Domain\Game\Engine\MovementEngine;
 use App\Events\Game\GameTickEvent;
 use App\Infrastructure\Game\Repositories\RedisGameStateRepository;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Redis;
 
 final class GameLoopCommand extends Command
 {
@@ -28,6 +29,8 @@ final class GameLoopCommand extends Command
     public function handle(): void
     {
         $this->info('Starting Game Loop at 20 FPS...');
+
+        Redis::flushAll();
 
         // Спавн первоначальной еды при запуске сервера
         $foods = $this->repository->getFoods();

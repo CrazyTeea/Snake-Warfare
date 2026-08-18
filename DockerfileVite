@@ -1,0 +1,5 @@
+FROM node:22
+LABEL authors="crazy"
+
+RUN npm install -g promise-retry
+RUN npm install -g npm

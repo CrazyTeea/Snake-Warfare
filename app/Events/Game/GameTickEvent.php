@@ -33,4 +33,29 @@ final class GameTickEvent implements ShouldBroadcastNow
     {
         return 'game.tick';
     }
+
+    public function broadcastWith(): array
+    {
+        return [
+            'snakes' => array_map(static fn ($snake) => [
+                'id' => (string) $snake->id,
+                'username' => (string) $snake->username,
+                'color' => (string) $snake->color,
+                'angle' => round((float) $snake->angle, 2),
+                'shieldActive' => (bool) ($snake->shieldActive ?? false),
+                'segments' => array_map(static fn ($s) => [
+                    'x' => round((float) (is_array($s) ? $s['x'] : $s->position->x), 1),
+                    'y' => round((float) (is_array($s) ? $s['y'] : $s->position->y), 1),
+                ], is_array($snake) ? $snake['segments'] : $snake->segments),
+            ], $this->snakes),
+            'eatenFoodIds' => $this->eatenFoodIds,
+            'spawnedFood' => array_map(static fn ($f) => [
+                'id' => (string) $f->id,
+                'x' => round((float) (is_array($f) ? $f['x'] : $f->position->x), 1),
+                'y' => round((float) (is_array($f) ? $f['y'] : $f->position->y), 1),
+                'color' => (string) $f->color,
+                'value' => (int) $f->value,
+            ], $this->spawnedFood),
+        ];
+    }
 }

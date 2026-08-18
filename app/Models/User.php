@@ -55,10 +55,13 @@ class User extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable;
 
     protected $fillable = [
+        'name',
         'telegram_id',
         'email',
         'username',
         'balance',
+        'password',
+        'coins',
         'current_skin_id',
     ];
 

@@ -18,7 +18,7 @@ final class MovementEngine
             return;
         }
 
-        // Перемещение головы по траектории угла
+        // 1. Перемещение головы по траектории угла
         $head = $snake->segments[0]->position;
         $newHeadX = $head->x + cos($angle) * $snake->speed;
         $newHeadY = $head->y + sin($angle) * $snake->speed;
@@ -29,13 +29,14 @@ final class MovementEngine
 
         $snake->segments[0]->position = new Point($newHeadX, $newHeadY);
 
-        // Инвариант расстояния между сегментами
+        // 2. Жесткое выравнивание каждого сегмента за предыдущим
+        // Это заставляет весь хвост плавно и непрерывно следовать за головой
         for ($i = 1; $i < count($snake->segments); $i++) {
             $prev = $snake->segments[$i - 1]->position;
             $curr = $snake->segments[$i]->position;
 
             $dist = $curr->distanceTo($prev);
-            if ($dist > self::SEGMENT_DISTANCE) {
+            if ($dist > 0.001) {
                 $ratio = self::SEGMENT_DISTANCE / $dist;
                 $nextX = $prev->x + ($curr->x - $prev->x) * $ratio;
                 $nextY = $prev->y + ($curr->y - $prev->y) * $ratio;
