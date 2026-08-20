@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\Item;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
@@ -17,9 +18,20 @@ class DatabaseSeeder extends Seeder
     {
         // User::factory(10)->create();
 
-        User::factory()->create([
-            'name' => 'Test User',
-            'email' => 'test@example.com',
+        Item::updateOrCreate(['slug' => 'shield'], [
+            'name' => 'Щит неуязвимости',
+            'type' => 'perk',
+            'price' => 100,
+            'max_uses_per_match' => 3,
+            'description' => 'Дает полную неуязвимость на 5 секунд'
+        ]);
+
+        Item::updateOrCreate(['slug' => 'invisible'], [
+            'name' => 'Невидимость',
+            'type' => 'perk',
+            'price' => 150,
+            'max_uses_per_match' => 2,
+            'description' => 'Делает змейку невидимой для других игроков на 5 секунд'
         ]);
     }
 }

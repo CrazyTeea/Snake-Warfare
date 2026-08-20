@@ -1,8 +1,10 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use App\Domain\Game\Entities\Snake;
 use App\Domain\Game\Entities\SnakeSegment;
+use App\Domain\Game\Services\GameSessionService;
 use App\Domain\Game\ValueObjects\Point;
 use App\Infrastructure\Game\Repositories\RedisGameStateRepository;
 use Illuminate\Http\JsonResponse;
@@ -16,6 +18,7 @@ final class GameController extends Controller
 {
     public function __construct(
         private readonly RedisGameStateRepository $repository,
+        private readonly GameSessionService $gameSessionService,
     ) {}
 
     public function index(Request $request): Response
@@ -31,6 +34,15 @@ final class GameController extends Controller
     public function spawn(Request $request): JsonResponse
     {
         $user = $request->user();
+
+        if ($user->energy < 1) {
+            return response()->json(['error' => 'Недостаточно энергии'], 403);
+        }
+        $user->decrement('energy', 1);
+
+        // Списываем экипированные перки пользователя и получаем баланс на раунд
+        $equippedBuffs = $this->gameSessionService->prepareMatchLoadout($user);
+
         $snakeId = 'snake_' . $user->id . '_' . Str::random(6);
 
         $startX = (float) random_int(500, 4500);
@@ -44,11 +56,14 @@ final class GameController extends Controller
             userId: $user->id,
             username: $user->name ?? 'Player',
             color: $color,
+            speed: 6.0,
+            angle: 0.0,
             segments: [
                 new SnakeSegment(new Point($startX, $startY)),
                 new SnakeSegment(new Point($startX - 15, $startY)),
                 new SnakeSegment(new Point($startX - 30, $startY)),
-            ]
+            ],
+            equippedBuffs: $equippedBuffs,
         );
 
         $snakes = $this->repository->getSnakes();
@@ -68,7 +83,7 @@ final class GameController extends Controller
             'snake_id' => $snakeId,
             'color' => $color,
             'start_position' => ['x' => $startX, 'y' => $startY],
-            'foods' => $foods, // <-- Теперь клиент получит 300 еды при спавне
+            'foods' => $foods,
         ]);
     }
 }

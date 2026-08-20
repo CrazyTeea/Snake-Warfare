@@ -8,7 +8,7 @@ export class GameRenderer {
         this.mySnakeId = null;
         this.camera = { x: 0, y: 0 };
         this.mapSize = 5000;
-        this.lerpFactor = 0.25; // Коэффициент сглаживания кадров
+        this.lerpFactor = 0.25; // Коэффициент сглаживания
     }
 
     setMySnakeId(id) {
@@ -22,18 +22,14 @@ export class GameRenderer {
             const stringId = String(snake.id);
             activeIds.add(stringId);
 
-            // Нормализуем ID змейки в объекте к строке
             snake.id = stringId;
-
             this.targetSnakes.set(stringId, snake);
 
             if (!this.snakes.has(stringId)) {
-                // Сразу клонируем змейку в локальный рендер-набор
                 this.snakes.set(stringId, JSON.parse(JSON.stringify(snake)));
             }
         }
 
-        // Удаление погибших змей
         for (const [id] of this.snakes) {
             if (!activeIds.has(id)) {
                 this.snakes.delete(id);
@@ -41,7 +37,6 @@ export class GameRenderer {
             }
         }
 
-        // Обновление еды
         for (const foodId of eatenFoodIds) {
             this.foods.delete(String(foodId));
         }
@@ -64,9 +59,9 @@ export class GameRenderer {
 
             current.angle = target.angle;
             current.color = target.color;
-            current.shieldActive = target.shieldActive;
+            current.shieldActive = Boolean(target.shieldActive);
+            current.invisible = Boolean(target.invisible);
 
-            // Интерполяция каждого сегмента
             for (let i = 0; i < target.segments.length; i++) {
                 if (!current.segments[i]) {
                     current.segments[i] = { ...target.segments[i] };
@@ -82,7 +77,6 @@ export class GameRenderer {
             }
         }
 
-        // Камера следует за головой нашей змеи
         if (this.mySnakeId && this.snakes.has(this.mySnakeId)) {
             const myHead = this.snakes.get(this.mySnakeId).segments[0];
             if (myHead) {
@@ -106,19 +100,16 @@ export class GameRenderer {
 
         this.ctx.restore();
 
-        // 🌟 Отрисовываем миникарту поверх игрового поля
         this.drawMinimap();
     }
 
     drawMinimap() {
-        // Адаптируем размер и отступы под мобильные устройства
         const isMobile = this.canvas.width < 768;
         const size = isMobile ? 85 : 120;
         const padding = isMobile ? 10 : 16;
         const x = this.canvas.width - size - padding;
         const y = this.canvas.height - size - padding;
 
-        // Фон и рамка
         this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
         this.ctx.strokeStyle = '#334155';
         this.ctx.lineWidth = 1.5;
@@ -131,6 +122,12 @@ export class GameRenderer {
             if (!snake.segments || !snake.segments[0]) continue;
 
             const isMe = id === this.mySnakeId;
+
+            // 👻 Вражеские невидимые змейки не отображаются на миникарте
+            if (snake.invisible && !isMe) {
+                continue;
+            }
+
             const head = snake.segments[0];
 
             this.ctx.beginPath();
@@ -142,11 +139,9 @@ export class GameRenderer {
                 Math.PI * 2
             );
 
-            // 🌟 Используем родной цвет змейки с бэкенда
             this.ctx.fillStyle = snake.color || (isMe ? '#38bdf8' : '#ef4444');
             this.ctx.fill();
 
-            // Белая обводка для змейки игрока
             if (isMe) {
                 this.ctx.strokeStyle = '#ffffff';
                 this.ctx.lineWidth = 1.5;
@@ -179,7 +174,6 @@ export class GameRenderer {
             this.ctx.stroke();
         }
 
-        // Границы карты
         this.ctx.strokeStyle = '#ef4444';
         this.ctx.lineWidth = 5;
         this.ctx.strokeRect(0, 0, this.mapSize, this.mapSize);
@@ -198,8 +192,18 @@ export class GameRenderer {
     }
 
     drawSnakes() {
-        for (const [, snake] of this.snakes) {
+        for (const [id, snake] of this.snakes) {
             if (!snake.segments || snake.segments.length === 0) continue;
+
+            const isMe = id === this.mySnakeId;
+
+            // 👻 INVISIBLE: Вражеская змейка скрыта, своя отрисовывается с прозрачностью 35%
+            if (snake.invisible) {
+                if (!isMe) continue;
+                this.ctx.globalAlpha = 0.35;
+            } else {
+                this.ctx.globalAlpha = 1.0;
+            }
 
             // Рисование сегментов тела
             for (let i = snake.segments.length - 1; i >= 0; i--) {
@@ -210,20 +214,30 @@ export class GameRenderer {
                 this.ctx.arc(seg.x, seg.y, isHead ? 15 : 12, 0, Math.PI * 2);
                 this.ctx.fillStyle = isHead ? '#ffffff' : snake.color;
                 this.ctx.fill();
+            }
 
-                if (snake.shieldActive && isHead) {
-                    this.ctx.strokeStyle = '#60a5fa';
-                    this.ctx.lineWidth = 4;
-                    this.ctx.stroke();
-                }
+            const head = snake.segments[0];
+
+            // 🛡️ SHIELD: Аура щита вокруг головы
+            if (snake.shieldActive && head) {
+                this.ctx.save();
+                this.ctx.beginPath();
+                this.ctx.arc(head.x, head.y, 24, 0, Math.PI * 2);
+                this.ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+                this.ctx.strokeStyle = '#38bdf8';
+                this.ctx.lineWidth = 3;
+                this.ctx.fill();
+                this.ctx.stroke();
+                this.ctx.restore();
             }
 
             // Имя игрока над головой
-            const head = snake.segments[0];
             this.ctx.font = '12px sans-serif';
             this.ctx.fillStyle = '#ffffff';
             this.ctx.textAlign = 'center';
             this.ctx.fillText(snake.username, head.x, head.y - 22);
+
+            this.ctx.globalAlpha = 1.0;
         }
     }
 }

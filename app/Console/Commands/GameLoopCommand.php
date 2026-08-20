@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Console\Commands;
 
 use App\Domain\Game\Engine\CollisionEngine;
@@ -32,6 +33,7 @@ final class GameLoopCommand extends Command
     public function handle(): void
     {
         $this->info('Starting Game Loop at 20 FPS...');
+        $tickCounter = 0;
 
         try {
             Redis::flushAll();
@@ -48,10 +50,20 @@ final class GameLoopCommand extends Command
 
         while (true) {
             $startTime = hrtime(true);
+            $tickCounter++;
 
             try {
+                if ($tickCounter % 100 === 0) {
+                    gc_collect_cycles();
+                }
+
                 $snakes = $this->repository->getSnakes();
                 $foods = $this->repository->getFoods();
+
+                if (count($foods) > 1500) {
+                    $foods = array_slice($foods, -1500);
+                }
+
                 $inputs = $this->repository->getPlayerInputs();
                 $now = microtime(true);
 
@@ -61,7 +73,6 @@ final class GameLoopCommand extends Command
                     foreach ($snakes as $snake) {
                         $inputData = $inputs[$snake->id] ?? null;
 
-                        // Удаляем змею, если нет инпута дольше 3 секунд
                         if ($inputData && isset($inputData['updated_at']) && ($now - $inputData['updated_at']) > self::INACTIVE_TIMEOUT_SEC) {
                             $timedOutSnakeIds[] = $snake->id;
                             continue;
@@ -69,8 +80,9 @@ final class GameLoopCommand extends Command
 
                         $angle = $inputData['angle'] ?? $snake->angle;
                         $boost = $inputData['boost'] ?? false;
+                        $ability = $inputData['ability'] ?? null;
 
-                        $droppedFood = $this->movementEngine->move($snake, $angle, $boost);
+                        $droppedFood = $this->movementEngine->move($snake, $angle, $boost, $ability);
                         if ($droppedFood !== null) {
                             $foods[] = $droppedFood;
                         }

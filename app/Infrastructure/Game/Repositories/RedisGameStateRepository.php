@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Infrastructure\Game\Repositories;
 
 use App\Domain\Game\Entities\Food;
@@ -43,6 +44,9 @@ final class RedisGameStateRepository
                 shieldActive: (bool) ($data['shield_active'] ?? false),
                 invisible: (bool) ($data['invisible'] ?? false),
                 segments: $segments,
+                equippedBuffs: $data['equipped_buffs'] ?? [],
+                buffTimers: $data['buff_timers'] ?? [],
+                boostTicks: (int) ($data['boost_ticks'] ?? 0),
             );
         }
 
@@ -74,6 +78,9 @@ final class RedisGameStateRepository
                     static fn (SnakeSegment $s): array => ['x' => $s->position->x, 'y' => $s->position->y],
                     $snake->segments
                 ),
+                'equipped_buffs' => $snake->equippedBuffs,
+                'buff_timers' => $snake->buffTimers,
+                'boost_ticks' => $snake->boostTicks,
             ]);
         }
 
@@ -136,29 +143,42 @@ final class RedisGameStateRepository
         Redis::hmset(self::FOODS_KEY, $payload);
     }
 
-    public function updatePlayerInput(string $snakeId, float $angle, bool $boost): void
+    public function updatePlayerInput(string $snakeId, float $angle, bool $boost, ?string $ability = null): void
     {
         Redis::hset(self::INPUTS_KEY, $snakeId, json_encode([
             'angle' => $angle,
             'boost' => $boost,
+            'ability' => $ability,
+            'updated_at' => microtime(true),
         ]));
     }
 
     /**
-     * @return array<string, array{angle: float, boost: bool}>
+     * @return array<string, array{angle: float, boost: bool, ability: ?string, updated_at: float}>
      */
     public function getPlayerInputs(): array
     {
         /** @var array<string, string> $rawInputs */
         $rawInputs = Redis::hgetall(self::INPUTS_KEY);
+
+        if (empty($rawInputs)) {
+            try {
+                $rawInputs = Redis::connection()->client()->hGetAll('game:inputs') ?: [];
+            } catch (\Throwable) {
+                $rawInputs = [];
+            }
+        }
+
         $inputs = [];
 
         foreach ($rawInputs as $snakeId => $json) {
-            $data = json_decode($json, true);
+            $data = is_string($json) ? json_decode($json, true) : $json;
             if (is_array($data)) {
-                $inputs[$snakeId] = [
+                $inputs[(string) $snakeId] = [
                     'angle' => (float) ($data['angle'] ?? 0.0),
                     'boost' => (bool) ($data['boost'] ?? false),
+                    'ability' => !empty($data['ability']) ? (string) $data['ability'] : null,
+                    'updated_at' => (float) ($data['updated_at'] ?? 0.0),
                 ];
             }
         }

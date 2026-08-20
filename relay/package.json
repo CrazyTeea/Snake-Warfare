@@ -1,0 +1,13 @@
+{
+    "name": "snake-relay",
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "start": "node index.js"
+    },
+    "dependencies": {
+        "laravel-echo": "^1.16.0",
+        "pusher-js": "^8.4.0-rc2",
+        "redis": "^4.6.13"
+    }
+}

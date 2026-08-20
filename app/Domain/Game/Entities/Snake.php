@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Domain\Game\Entities;
 
 use AllowDynamicProperties;
@@ -8,18 +9,23 @@ use App\Domain\Game\ValueObjects\Point;
 final class Snake
 {
     /**
-     * @param array<int, SnakeSegment> $segments
+     * @param SnakeSegment[] $segments
+     * @param array<string, array{count: int, max: int}> $equippedBuffs
+     * @param array<string, float> $buffTimers
      */
     public function __construct(
-        public readonly string $id,
-        public readonly int $userId,
-        public readonly string $username,
+        public string $id,
+        public int $userId,
+        public string $username,
         public string $color,
-        public float $speed = 6.0,
-        public float $angle = 0.0,
+        public float $speed,
+        public float $angle,
         public bool $shieldActive = false,
         public bool $invisible = false,
         public array $segments = [],
+        public array $equippedBuffs = [],
+        public array $buffTimers = [],
+        public int $boostTicks = 0,
     ) {}
 
     public function getHead(): Point

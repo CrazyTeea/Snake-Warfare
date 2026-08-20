@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Domain\Game\Engine;
 
 use App\Domain\Game\Entities\Food;
@@ -33,7 +34,7 @@ final class CollisionEngine
         $segmentGrid = [];
         $foodGrid = [];
 
-        // Индексация в Spatial Hash Grid
+        // 1. Индексация объектов в Spatial Hash Grid
         foreach ($foods as $food) {
             $key = $this->grid->getCellKey($food->position);
             $foodGrid[$key][] = $food;
@@ -50,7 +51,7 @@ final class CollisionEngine
             }
         }
 
-        // 1. Поедание еды
+        // 2. Поедание еды (невидимые змейки также едят еду)
         $eatenFoodIds = [];
         foreach ($snakes as $snake) {
             $head = $snake->getHead();
@@ -70,9 +71,10 @@ final class CollisionEngine
                         $eatenFoodIds[] = $food->id;
                         $eatenFood[] = $food;
 
-                        // Увеличение длины змеи
                         $lastSeg = end($snake->segments);
-                        $snake->segments[] = new SnakeSegment(new Point($lastSeg->position->x, $lastSeg->position->y));
+                        if ($lastSeg) {
+                            $snake->segments[] = new SnakeSegment(new Point($lastSeg->position->x, $lastSeg->position->y));
+                        }
                     }
                 }
             }
@@ -80,8 +82,9 @@ final class CollisionEngine
 
         $foods = array_values(array_filter($foods, static fn (Food $f): bool => !in_array($f->id, $eatenFoodIds, true)));
 
-        // 2. Коллизии голова -> сегмент тела (поиск БЛИЖАЙШЕГО сегмента)
+        // 3. Коллизии голова -> тело
         foreach ($snakes as $attacker) {
+            // 🛡️ SHIELD: Атакующий под щитом игнорирует врезания
             if ($attacker->shieldActive) {
                 continue;
             }
@@ -104,11 +107,7 @@ final class CollisionEngine
                     /** @var SnakeSegment $segment */
                     $segment = $targetData['segment'];
 
-                    if ($victim->shieldActive) {
-                        continue;
-                    }
-
-                    // Игнорирование врезания в собственное горло/голову
+                    // Игнорирование врезания в себя (первые 3 сегмента)
                     if ($attacker->id === $victim->id && $segIndex <= 2) {
                         continue;
                     }
@@ -132,7 +131,7 @@ final class CollisionEngine
                 $segIndex = $closestCollision['segIndex'];
 
                 if ($attacker->color === $victim->color) {
-                    // ОДИНАКОВЫЙ ЦВЕТ: Жертва теряет хвост от места удара
+                    // ОДИНАКОВЫЙ ЦВЕТ: Жертва теряет хвост
                     if ($segIndex > 0 && $segIndex < count($victim->segments)) {
                         $severed = $victim->truncateTailFromIndex($segIndex);
                         $newFood = $this->foodSpawner->convertSegmentsToFood($severed, $victim->color);

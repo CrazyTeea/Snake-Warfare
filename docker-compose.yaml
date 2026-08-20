@@ -96,6 +96,7 @@ services:
             context: .
             dockerfile: DockerfileVite
         image: snake-warfare-vite
+        container_name: snake-warfare-vite
         working_dir: /app
         volumes:
             - ./:/app
@@ -118,6 +119,23 @@ services:
                 "
         networks:
             - snake_network
+    relay:
+        build:
+            context: .
+            dockerfile: DockerfileVite
+        image: snake-warfare-relay
+        container_name: snake-warfare-relay
+        working_dir: /app/relay
+        volumes:
+            - ./:/app
+        command: sh -c "npm install && npm start"
+        env_file:
+            - .env
+        depends_on:
+            - redis
+            - reverb
+        networks:
+            - snake_network # Замените на вашу сеть, если она называется иначе
 
 networks:
     snake_network:
