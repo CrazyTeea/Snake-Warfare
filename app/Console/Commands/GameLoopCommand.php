@@ -7,7 +7,9 @@ use App\Domain\Game\Engine\MovementEngine;
 use App\Events\Game\GameTickEvent;
 use App\Infrastructure\Game\Repositories\RedisGameStateRepository;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
+use Throwable;
 
 final class GameLoopCommand extends Command
 {
@@ -15,7 +17,8 @@ final class GameLoopCommand extends Command
     protected $description = 'Runs the 20 FPS Game Loop for Snake engine';
 
     private const int TARGET_FPS = 20;
-    private const int FRAME_TIME_NS = 50_000_000; // 50 мс в наносекундах
+    private const int FRAME_TIME_NS = 50_000_000;
+    private const float INACTIVE_TIMEOUT_SEC = 3.0;
 
     public function __construct(
         private readonly RedisGameStateRepository $repository,
@@ -30,51 +33,87 @@ final class GameLoopCommand extends Command
     {
         $this->info('Starting Game Loop at 20 FPS...');
 
-        Redis::flushAll();
+        try {
+            Redis::flushAll();
 
-        // Спавн первоначальной еды при запуске сервера
-        $foods = $this->repository->getFoods();
-        if (empty($foods)) {
-            $foods = $this->foodSpawner->spawnInitialFood(300);
-            $this->repository->saveFoods($foods);
+            $foods = $this->repository->getFoods();
+            if (empty($foods)) {
+                $foods = $this->foodSpawner->spawnInitialFood(300);
+                $this->repository->saveFoods($foods);
+            }
+        } catch (Throwable $e) {
+            $this->error('Failed to initialize Game Loop state: ' . $e->getMessage());
+            Log::error($e);
         }
 
         while (true) {
             $startTime = hrtime(true);
 
-            // 1. Чтение текущего состояния из Redis
-            $snakes = $this->repository->getSnakes();
-            $foods = $this->repository->getFoods();
-            $inputs = $this->repository->getPlayerInputs();
+            try {
+                $snakes = $this->repository->getSnakes();
+                $foods = $this->repository->getFoods();
+                $inputs = $this->repository->getPlayerInputs();
+                $now = microtime(true);
 
-            if (!empty($snakes)) {
-                // 2. Движение с учетом ввода пользователей
-                foreach ($snakes as $snake) {
-                    $input = $inputs[$snake->id] ?? ['angle' => $snake->angle, 'boost' => false];
-                    $this->movementEngine->move($snake, $input['angle'], $input['boost']);
+                if (!empty($snakes)) {
+                    $timedOutSnakeIds = [];
+
+                    foreach ($snakes as $snake) {
+                        $inputData = $inputs[$snake->id] ?? null;
+
+                        // Удаляем змею, если нет инпута дольше 3 секунд
+                        if ($inputData && isset($inputData['updated_at']) && ($now - $inputData['updated_at']) > self::INACTIVE_TIMEOUT_SEC) {
+                            $timedOutSnakeIds[] = $snake->id;
+                            continue;
+                        }
+
+                        $angle = $inputData['angle'] ?? $snake->angle;
+                        $boost = $inputData['boost'] ?? false;
+
+                        $droppedFood = $this->movementEngine->move($snake, $angle, $boost);
+                        if ($droppedFood !== null) {
+                            $foods[] = $droppedFood;
+                        }
+                    }
+
+                    // Столкновения
+                    $collisionResult = $this->collisionEngine->process($snakes, $foods);
+                    $allDeadIds = array_unique(array_merge($collisionResult->deadSnakeIds, $timedOutSnakeIds));
+
+                    // Превращение погибших и отключившихся змей в лут
+                    $deadLootFood = [];
+                    foreach ($allDeadIds as $deadId) {
+                        foreach ($snakes as $snake) {
+                            if ($snake->id === $deadId && !empty($snake->segments)) {
+                                $dropped = $this->foodSpawner->convertSegmentsToFood($snake->segments, $snake->color);
+                                array_push($foods, ...$dropped);
+                                array_push($deadLootFood, ...$dropped);
+                                break;
+                            }
+                        }
+                        $this->repository->removeSnake($deadId);
+                    }
+
+                    $snakes = array_values(array_filter($snakes, static fn ($s) => !in_array($s->id, $allDeadIds, true)));
+
+                    $this->repository->saveSnakes($snakes);
+                    $this->repository->saveFoods($foods);
+
+                    $allSpawnedFood = array_merge($collisionResult->spawnedFood, $deadLootFood);
+
+                    broadcast(new GameTickEvent(
+                        snakes: $snakes,
+                        eatenFoodIds: array_map(static fn ($f) => $f->id, $collisionResult->eatenFood),
+                        spawnedFood: $allSpawnedFood,
+                    ));
                 }
-
-                // 3. Расчет коллизий
-                $collisionResult = $this->collisionEngine->process($snakes, $foods);
-
-                // 4. Очистка погибших змей
-                foreach ($collisionResult->deadSnakeIds as $deadId) {
-                    $this->repository->removeSnake($deadId);
-                }
-
-                // 5. Сохранение обновленного состояния
-                $this->repository->saveSnakes($snakes);
-                $this->repository->saveFoods($foods);
-
-                // 6. Вещание тика в Laravel Reverb WebSockets
-                broadcast(new GameTickEvent(
-                    snakes: $snakes,
-                    eatenFoodIds: array_map(static fn ($f) => $f->id, $collisionResult->eatenFood),
-                    spawnedFood: $collisionResult->spawnedFood,
-                ));
+            } catch (Throwable $e) {
+                $this->error('[' . date('Y-m-d H:i:s') . '] Game Loop Error: ' . $e->getMessage());
+                Log::error($e);
+                usleep(100_000);
+                continue;
             }
 
-            // Компенсация времени кадра для стабильных 20 FPS
             $elapsedNs = hrtime(true) - $startTime;
             $sleepTimeNs = self::FRAME_TIME_NS - $elapsedNs;
 

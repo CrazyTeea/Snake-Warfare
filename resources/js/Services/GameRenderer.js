@@ -98,7 +98,6 @@ export class GameRenderer {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         this.ctx.save();
-        // Смещение камеры
         this.ctx.translate(-this.camera.x, -this.camera.y);
 
         this.drawGrid();
@@ -106,6 +105,54 @@ export class GameRenderer {
         this.drawSnakes();
 
         this.ctx.restore();
+
+        // 🌟 Отрисовываем миникарту поверх игрового поля
+        this.drawMinimap();
+    }
+
+    drawMinimap() {
+        // Адаптируем размер и отступы под мобильные устройства
+        const isMobile = this.canvas.width < 768;
+        const size = isMobile ? 85 : 120;
+        const padding = isMobile ? 10 : 16;
+        const x = this.canvas.width - size - padding;
+        const y = this.canvas.height - size - padding;
+
+        // Фон и рамка
+        this.ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        this.ctx.strokeStyle = '#334155';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.fillRect(x, y, size, size);
+        this.ctx.strokeRect(x, y, size, size);
+
+        const scale = size / this.mapSize;
+
+        for (const [id, snake] of this.snakes) {
+            if (!snake.segments || !snake.segments[0]) continue;
+
+            const isMe = id === this.mySnakeId;
+            const head = snake.segments[0];
+
+            this.ctx.beginPath();
+            this.ctx.arc(
+                x + head.x * scale,
+                y + head.y * scale,
+                isMe ? (isMobile ? 3 : 4) : (isMobile ? 2 : 2.5),
+                0,
+                Math.PI * 2
+            );
+
+            // 🌟 Используем родной цвет змейки с бэкенда
+            this.ctx.fillStyle = snake.color || (isMe ? '#38bdf8' : '#ef4444');
+            this.ctx.fill();
+
+            // Белая обводка для змейки игрока
+            if (isMe) {
+                this.ctx.strokeStyle = '#ffffff';
+                this.ctx.lineWidth = 1.5;
+                this.ctx.stroke();
+            }
+        }
     }
 
     drawGrid() {

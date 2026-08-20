@@ -1,21 +1,60 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import axios from 'axios';
 import { GameRenderer } from '@/Services/GameRenderer';
+import {router} from "@inertiajs/vue3";
 
-const props = defineProps({
-    user: Object,
-});
+const props = defineProps({ user: Object });
 
 const canvasRef = ref(null);
 const isPlaying = ref(false);
+const isDead = ref(false);
+const finalScore = ref(0);
+
 const currentSnakeId = ref(null);
 const boostActive = ref(false);
+const activeSnakes = ref([]);
 
 let renderer = null;
 let animationFrameId = null;
 let inputInterval = null;
 let currentAngle = 0;
+
+const logout = () => {
+    router.post('/logout');
+};
+
+const buyCoins = async () => {
+    try {
+        const response = await axios.post('/api/payments/create', { amount: 100 });
+        if (response.data.payment_url) {
+            window.location.href = response.data.payment_url;
+        }
+    } catch (e) {
+        alert('Ошибка создания платежа: ' + (e.response?.data?.message || 'Попробуйте позже'));
+    }
+};
+
+// Вычисление Лидерборда Top-10
+const leaderboard = computed(() => {
+    return [...activeSnakes.value]
+        .sort((a, b) => (b.segments?.length || 0) - (a.segments?.length || 0))
+        .slice(0, 10);
+});
+
+// Счет и позиция текущего игрока
+const mySnake = computed(() => {
+    return activeSnakes.value.find(s => String(s.id) === String(currentSnakeId.value));
+});
+
+const myScore = computed(() => mySnake.value ? mySnake.value.segments.length : 0);
+
+const myRank = computed(() => {
+    if (!mySnake.value) return '-';
+    const sorted = [...activeSnakes.value].sort((a, b) => (b.segments?.length || 0) - (a.segments?.length || 0));
+    const index = sorted.findIndex(s => String(s.id) === String(currentSnakeId.value));
+    return index !== -1 ? index + 1 : '-';
+});
 
 const resizeCanvas = () => {
     if (canvasRef.value) {
@@ -26,6 +65,7 @@ const resizeCanvas = () => {
 
 const spawnSnake = async () => {
     try {
+        isDead.value = false;
         const response = await axios.post('/game/spawn');
         currentSnakeId.value = String(response.data.snake_id);
         renderer.setMySnakeId(currentSnakeId.value);
@@ -34,8 +74,6 @@ const spawnSnake = async () => {
             renderer.setInitialFoods(response.data.foods);
         }
 
-        // 🌟 Мгновенно создаем фейковую локальную змейку для рендерера,
-        // не дожидаясь прихода тика по WebSocket
         const startPos = response.data.start_position;
         const initialSnake = {
             id: currentSnakeId.value,
@@ -51,7 +89,6 @@ const spawnSnake = async () => {
         };
 
         renderer.updateServerState([initialSnake], [], []);
-
         isPlaying.value = true;
     } catch (error) {
         console.error('Failed to spawn snake:', error);
@@ -60,46 +97,43 @@ const spawnSnake = async () => {
 
 const handleMouseMove = (event) => {
     if (!isPlaying.value || !canvasRef.value) return;
+    const dx = event.clientX - canvasRef.value.width / 2;
+    const dy = event.clientY - canvasRef.value.height / 2;
+    currentAngle = Math.atan2(dy, dx);
+};
 
-    const centerX = canvasRef.value.width / 2;
-    const centerY = canvasRef.value.height / 2;
+const handleTouchMove = (event) => {
+    // 🌟 Если нажатие произошло НЕ по холсту игры (а по кнопкам или меню), пропускаем событие
+    if (!canvasRef.value || event.target !== canvasRef.value) {
+        return;
+    }
 
-    const dx = event.clientX - centerX;
-    const dy = event.clientY - centerY;
+    // Блокируем свайпы и прокрутку страницы только при управлении змейкой на Canvas
+    if (event.cancelable) {
+        event.preventDefault();
+    }
+
+    if (!isPlaying.value || !event.touches[0]) return;
+
+    const dx = event.touches[0].clientX - canvasRef.value.width / 2;
+    const dy = event.touches[0].clientY - canvasRef.value.height / 2;
 
     currentAngle = Math.atan2(dy, dx);
 };
 
-const handleKeyDown = (event) => {
-    if (event.code === 'Space') {
-        boostActive.value = true;
-    }
-};
-
-const handleKeyUp = (event) => {
-    if (event.code === 'Space') {
-        boostActive.value = false;
-    }
-};
-
 const sendPlayerInput = async () => {
     if (!isPlaying.value || !currentSnakeId.value) return;
-
     try {
         await axios.post('/api/game/input', {
             snake_id: currentSnakeId.value,
             angle: currentAngle,
             boost: boostActive.value,
         });
-    } catch (e) {
-        // Ошибки ввода игнорируем во избежание спама
-    }
+    } catch (e) {}
 };
 
 const renderLoop = () => {
-    if (renderer) {
-        renderer.render();
-    }
+    if (renderer) renderer.render();
     animationFrameId = requestAnimationFrame(renderLoop);
 };
 
@@ -107,26 +141,25 @@ onMounted(() => {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('touchstart', handleTouchMove, { passive: false });
+    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space') boostActive.value = true; });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space') boostActive.value = false; });
 
     renderer = new GameRenderer(canvasRef.value);
 
-    // Подключение к WebSocket Reverb
     if (window.Echo) {
         window.Echo.channel('game.world')
             .listen('.game.tick', (event) => {
-                renderer.updateServerState(
-                    event.snakes,
-                    event.eatenFoodIds,
-                    event.spawnedFood
-                );
+                activeSnakes.value = event.snakes;
+                renderer.updateServerState(event.snakes, event.eatenFoodIds, event.spawnedFood);
 
                 if (currentSnakeId.value) {
-                    // Используем приведение к String при поиске
                     const alive = event.snakes.some(s => String(s.id) === String(currentSnakeId.value));
                     if (!alive && isPlaying.value) {
+                        finalScore.value = myScore.value;
                         isPlaying.value = false;
+                        isDead.value = true;
                         currentSnakeId.value = null;
                         renderer.setMySnakeId(null);
                     }
@@ -134,7 +167,6 @@ onMounted(() => {
             });
     }
 
-    // Запуск рендеринга и отправки ввода (20 раз в сек)
     animationFrameId = requestAnimationFrame(renderLoop);
     inputInterval = setInterval(sendPlayerInput, 50);
 });
@@ -142,44 +174,107 @@ onMounted(() => {
 onUnmounted(() => {
     window.removeEventListener('resize', resizeCanvas);
     window.removeEventListener('mousemove', handleMouseMove);
-    window.removeEventListener('keydown', handleKeyDown);
-    window.removeEventListener('keyup', handleKeyUp);
+    window.removeEventListener('touchstart', handleTouchMove);
+    window.removeEventListener('touchmove', handleTouchMove);
 
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
     if (inputInterval) clearInterval(inputInterval);
-
-    if (window.Echo) {
-        window.Echo.leaveChannel('game.world');
-    }
+    if (window.Echo) window.Echo.leaveChannel('game.world');
 });
 </script>
 
 <template>
-    <div class="relative w-screen h-screen overflow-hidden bg-slate-950 text-white font-sans">
-        <!-- Canvas игры -->
-        <canvas ref="canvasRef" class="block w-full h-full cursor-crosshair"></canvas>
+    <div class="relative w-screen h-screen overflow-hidden bg-slate-950 text-white font-sans select-none">
+        <canvas ref="canvasRef" style="touch-action: none; width: 100vw; height: 100vh; display: block;"></canvas>
 
-        <!-- Меню подключения / Спавна -->
-        <div v-if="!isPlaying" class="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm z-50">
+        <!-- Меню входа -->
+        <div v-if="!isPlaying && !isDead" class="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm z-50">
             <div class="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl text-center max-w-md w-full">
                 <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">
                     Snake MMO
                 </h1>
-                <p class="text-slate-400 mb-6">Добро пожаловать, {{ user.name }}!</p>
+                <p class="text-slate-400 mb-4">Игрок: <span class="text-white font-bold">{{ user.name }}</span></p>
 
-                <button
-                    @click="spawnSnake"
-                    class="w-full py-4 bg-blue-600 hover:bg-blue-500 font-bold rounded-xl text-lg shadow-lg shadow-blue-500/30 transition transform active:scale-95"
-                >
-                    Играть
-                </button>
+                <!-- 🌟 Плашка баланса и кнопка пополнения -->
+                <div class="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 p-3 rounded-xl mb-6">
+                    <div class="text-left">
+                        <span class="text-xs text-slate-400 block">Баланс монет</span>
+                        <span class="text-lg font-black text-amber-400 font-mono">{{ user.coins || 0 }} 🪙</span>
+                    </div>
+                    <button
+                        @click="buyCoins"
+                        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-sm transition transform active:scale-95 shadow-md shadow-emerald-600/30"
+                    >
+                        + Пополнить (100₽)
+                    </button>
+                </div>
+
+                <div class="space-y-3">
+                    <button
+                        @click="spawnSnake"
+                        class="w-full py-4 bg-blue-600 hover:bg-blue-500 font-bold rounded-xl text-lg shadow-lg shadow-blue-500/30 transition transform active:scale-95"
+                    >
+                        Играть
+                    </button>
+
+                    <button
+                        @click="logout"
+                        class="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl border border-slate-700 transition transform active:scale-95"
+                    >
+                        Выйти из аккаунта
+                    </button>
+                </div>
             </div>
         </div>
 
-        <!-- Интерфейс Управления в игре -->
-        <div v-else class="absolute top-4 left-4 bg-slate-900/80 backdrop-blur border border-slate-800 p-4 rounded-xl text-xs space-y-1 z-10">
-            <p class="text-slate-400"><span class="text-white font-bold">Мышь:</span> Управление углом</p>
-            <p class="text-slate-400"><span class="text-white font-bold">Пробел:</span> Ускорение (Boost)</p>
+        <!-- Окно гибели (Game Over) -->
+        <div v-if="isDead" class="absolute inset-0 flex items-center justify-center bg-red-950/80 backdrop-blur-md z-50">
+            <div class="bg-slate-900 border border-red-500/30 p-8 rounded-2xl shadow-2xl text-center max-w-md w-full animate-bounce-short">
+                <h2 class="text-3xl font-black text-red-500 mb-2">ВАС УБИЛИ!</h2>
+                <p class="text-slate-300 text-lg mb-6">Длина змейки: <span class="text-amber-400 font-bold">{{ finalScore }}</span></p>
+                <button @click="spawnSnake" class="w-full py-4 bg-linear-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 font-bold rounded-xl text-lg shadow-lg shadow-green-500/30 transition transform active:scale-95">Респавн</button>
+            </div>
         </div>
+
+        <!-- Игровой HUD -->
+        <template v-if="isPlaying">
+            <!-- Подсказки по управлению (скрываем на мобилках) -->
+            <div class="hidden md:block absolute top-4 left-4 bg-slate-900/80 backdrop-blur border border-slate-800 p-3 rounded-xl text-xs space-y-1 z-10">
+                <p class="text-slate-400"><span class="text-white font-bold">Мышь:</span> Управление</p>
+                <p class="text-slate-400"><span class="text-white font-bold">Пробел:</span> Ускорение</p>
+            </div>
+
+            <!-- Адаптивный Лидерборд (Top-10) -->
+            <div class="absolute top-2 right-2 sm:top-4 sm:right-4 bg-slate-900/85 backdrop-blur border border-slate-800 p-2 sm:p-4 rounded-xl text-[10px] sm:text-xs w-36 sm:w-56 shadow-xl z-10">
+                <h3 class="font-bold text-slate-400 border-b border-slate-800 pb-1 sm:pb-2 mb-1 sm:mb-2 uppercase tracking-wider">Рейтинг (Top 10)</h3>
+                <div class="space-y-0.5 sm:space-y-1">
+                    <div v-for="(s, idx) in leaderboard" :key="s.id" class="flex justify-between items-center" :class="{ 'text-cyan-400 font-bold': String(s.id) === String(currentSnakeId) }">
+                        <span class="truncate max-w-[70px] sm:max-w-[120px]">{{ idx + 1 }}. {{ s.username }}</span>
+                        <span class="font-mono text-amber-400">{{ s.segments?.length || 0 }}</span>
+                    </div>
+                </div>
+            </div>
+            <button
+                @touchstart.prevent="boostActive = true"
+                @touchend.prevent="boostActive = false"
+                @mousedown.prevent="boostActive = true"
+                @mouseup.prevent="boostActive = false"
+                class="md:hidden absolute bottom-28 right-4 w-16 h-16 bg-amber-500/80 active:bg-amber-400 border-2 border-amber-300 rounded-full flex items-center justify-center font-black text-xs shadow-lg backdrop-blur z-20 select-none text-white"
+            >
+                BOOST
+            </button>
+
+            <!-- Адаптивный плашка длины и места -->
+            <div class="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 bg-slate-900/85 backdrop-blur border border-slate-800 p-2 sm:p-4 rounded-xl text-xs sm:text-sm flex gap-3 sm:gap-6 z-10">
+                <div>
+                    <span class="text-slate-400 text-[9px] sm:text-xs block">ДЛИНА</span>
+                    <span class="text-amber-400 text-base sm:text-xl font-black font-mono">{{ myScore }}</span>
+                </div>
+                <div>
+                    <span class="text-slate-400 text-[9px] sm:text-xs block">МЕСТО</span>
+                    <span class="text-cyan-400 text-base sm:text-xl font-black font-mono">#{{ myRank }}</span>
+                </div>
+            </div>
+        </template>
     </div>
 </template>

@@ -56,7 +56,7 @@ const submit = () => {
 
             <p class="text-center text-sm text-slate-400">
                 Нет аккаунта?
-                <Link :href="route('register')" class="text-cyan-400 hover:underline font-semibold">Зарегистрироваться</Link>
+                <Link href="/register" class="text-cyan-400 hover:underline font-semibold">Зарегистрироваться</Link>
             </p>
         </div>
     </div>

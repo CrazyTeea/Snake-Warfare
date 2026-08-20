@@ -1,8 +1,10 @@
 <?php
 namespace App\Domain\Game\Entities;
 
+use AllowDynamicProperties;
 use App\Domain\Game\ValueObjects\Point;
 
+#[AllowDynamicProperties]
 final class Snake
 {
     /**

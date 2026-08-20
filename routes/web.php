@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\Auth\TelegramAuthController;
 use App\Http\Controllers\GameController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -13,6 +14,8 @@ Route::get('/', function () {
         'canRegister' => Route::has('register'),
     ]);
 })->name('home');
+
+Route::get('/auth/telegram/callback', [TelegramAuthController::class, 'handleCallback'])->name('auth.telegram');
 
 // Маршруты для гостей (Guest)
 Route::middleware('guest')->group(function () {
