@@ -7,5 +7,10 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
 });
 
 Broadcast::channel('game.input', function ($user) {
-    return $user !== null; // Только для авторизованных
+    return $user !== null;
+});
+
+// Добавляем канал комнаты, который использует фронтенд
+Broadcast::channel('game.room.{roomCode}', function ($user, $roomCode) {
+    return $user !== null; // Проверяем, что пользователь авторизован
 });

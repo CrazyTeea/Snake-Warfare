@@ -19,6 +19,7 @@ final class MovementEngine
         // 🚀 BOOST
         $canBoost = $boost && count($snake->segments) > 3;
         $snake->speed = $canBoost ? 12.0 : 6.0;
+        $snake->boost = $canBoost;
 
         if (empty($snake->segments)) {
             return null;

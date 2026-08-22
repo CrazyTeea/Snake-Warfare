@@ -14,7 +14,6 @@ final class GameTickEvent implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
-    /** @var array<int, array{u: string, s: int}> */
     public array $leaderboard;
 
     /**
@@ -23,6 +22,7 @@ final class GameTickEvent implements ShouldBroadcastNow
      * @param array<int, Food|array> $spawnedFood
      */
     public function __construct(
+        public string $roomCode,
         public array $snakes,
         public array $eatenFoodIds,
         public array $spawnedFood,
@@ -32,7 +32,6 @@ final class GameTickEvent implements ShouldBroadcastNow
             's' => count(is_array($snake) ? ($snake['segments'] ?? []) : $snake->segments),
         ], $this->snakes);
 
-        // Стабильная сортировка: если очки равны, сортируем по нику, чтобы таблица не мерцала каждую миллисекунду
         usort($board, static function ($a, $b) {
             if ($a['s'] === $b['s']) {
                 return strcmp($a['u'], $b['u']);
@@ -46,7 +45,7 @@ final class GameTickEvent implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return [
-            new Channel('game.world'),
+            new Channel("game.room.{$this->roomCode}"),
         ];
     }
 
@@ -58,7 +57,6 @@ final class GameTickEvent implements ShouldBroadcastNow
     public function broadcastWith(): array
     {
         return [
-            // s = snakes
             's' => array_map(static fn ($snake) => [
                 'i'   => (string) (is_array($snake) ? $snake['id'] : $snake->id),
                 'u'   => (string) (is_array($snake) ? $snake['username'] : $snake->username),
@@ -74,16 +72,13 @@ final class GameTickEvent implements ShouldBroadcastNow
                 ], is_array($snake) ? $snake['segments'] : $snake->segments),
             ], $this->snakes),
 
-            // l = leaderboard [{u: "Username", s: 10}, ...]
             'l' => array_map(static fn ($item) => [
                 'u' => $item['u'],
-                'score' => $item['s'], // <-- ИЗМЕНЕНО на score, чтобы фронтенд его увидел и перестал выводить 0
+                'score' => $item['s'],
             ], $this->leaderboard),
 
-            // e = eaten food IDs
             'e' => $this->eatenFoodIds,
 
-            // f = spawned food tuples [[id, x, y, color, value]]
             'f' => array_map(static fn ($f) => [
                 (string) (is_array($f) ? $f['id'] : $f->id),
                 (int) round((float) (is_array($f) ? $f['x'] : $f->position->x)),

@@ -61,8 +61,23 @@ echo.private('game.input')
             updated_at: Date.now() / 1000
         });
 
+        // 1. Пишем в глобальный хэш (на всякий случай)
         await redis.hSet('game:inputs', payload.snake_id, inputJson);
         await redis.hSet(`${REDIS_PREFIX}game:inputs`, payload.snake_id, inputJson);
+
+        // 2. Если есть room_code, пишем в ключи комнаты (под все возможные варианты префиксов репозитория)
+        if (payload.room_code) {
+            const roomKeys = [
+                `room:${payload.room_code}:inputs`,
+                `${REDIS_PREFIX}room:${payload.room_code}:inputs`,
+                `game:room:${payload.room_code}:inputs`,
+                `${REDIS_PREFIX}game:room:${payload.room_code}:inputs`
+            ];
+
+            for (const key of roomKeys) {
+                await redis.hSet(key, payload.snake_id, inputJson);
+            }
+        }
     });
 
 console.log('Relay is listening for Reverb whispers on "private-game.input"...');

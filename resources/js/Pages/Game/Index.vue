@@ -4,7 +4,13 @@ import axios from 'axios';
 import { GameRenderer } from '@/Services/GameRenderer';
 import { router } from "@inertiajs/vue3";
 
-const props = defineProps({ user: Object });
+const props = defineProps({
+    auth: Object, // Принимаем auth от Inertia вместо несуществующего props.user
+    room: Object, // Приходит из GameController::room($code)[cite: 11]
+});
+
+// Безопасно получаем пользователя из auth
+const user = computed(() => props.auth?.user || {});
 
 const canvasRef = ref(null);
 const isPlaying = ref(false);
@@ -18,8 +24,9 @@ const activeSnakes = ref([]);
 const serverLeaderboard = ref([]);
 const requestedAbility = ref(null);
 
-const userCoins = ref(props.user.coins || 0);
-const userBuffs = ref(props.user.equipped_buffs || { shield: { count: 0 }, invisible: { count: 0 } });
+// Инициализируем реактивные данные после определения computed свойства user
+const userCoins = ref(user.value.coins || 0);
+const userBuffs = ref(user.value.equipped_buffs || { shield: { count: 0 }, invisible: { count: 0 } });
 
 let renderer = null;
 let animationFrameId = null;
@@ -29,13 +36,15 @@ let currentAngle = 0;
 let lastRenderTime = performance.now();
 const touchOptions = { passive: false };
 
+const roomCode = computed(() => props.room?.code || null);
+const roomChannelName = computed(() => roomCode.value ? `game.room.${roomCode.value}` : 'game.world');
+
 const logout = () => {
     router.post('/logout');
 };
 
-// Открытие оплаты в НОВОМ окне с выбором стратегического метода
+// Открытие оплаты в НОВОМ окне с выбором метода[cite: 11]
 const buyCoins = async (gateway = 'yookassa') => {
-    // Предварительно открываем пустую вкладку, чтобы браузер не заблокировал Popup
     const paymentWindow = window.open('about:blank', '_blank');
 
     try {
@@ -145,7 +154,10 @@ const resizeCanvas = () => {
 const spawnSnake = async () => {
     try {
         isDead.value = false;
-        const response = await axios.post('/game/spawn');
+        const response = await axios.post('/game/spawn', {
+            room_code: roomCode.value,
+        });
+
         currentSnakeId.value = String(response.data.snake_id);
         renderer.setMySnakeId(currentSnakeId.value);
 
@@ -156,7 +168,7 @@ const spawnSnake = async () => {
         const startPos = response.data.start_position;
         const initialSnake = {
             id: currentSnakeId.value,
-            username: props.user.name,
+            username: user.value.name,
             color: response.data.color,
             angle: 0,
             shieldActive: false,
@@ -209,10 +221,12 @@ const handleKeyUp = (e) => {
 };
 
 const sendPlayerInput = () => {
-    if (!isPlaying.value || !currentSnakeId.value || !window.Echo) return;
+    if (!isPlaying.value || !currentSnakeId.value) return;
 
+    // Если используется Laravel Echo и клиентские события (whisper)
     window.Echo.private('game.input')
         .whisper('player-input', {
+            room_code: roomCode.value, // Обязательно передаем комнату
             snake_id: currentSnakeId.value,
             angle: currentAngle,
             boost: boostActive.value,
@@ -243,7 +257,7 @@ onMounted(() => {
     renderer = new GameRenderer(canvasRef.value);
 
     if (window.Echo) {
-        window.Echo.channel('game.world')
+        window.Echo.channel(roomChannelName.value)
             .listen('.game.tick', (event) => {
                 if (!event) return;
 
@@ -272,8 +286,6 @@ onMounted(() => {
                     }
                 }
             });
-
-        window.Echo.private('game.input');
     }
 
     lastRenderTime = performance.now();
@@ -295,8 +307,7 @@ onUnmounted(() => {
     if (pollInterval) clearInterval(pollInterval);
 
     if (window.Echo) {
-        window.Echo.leave('game.world');
-        window.Echo.leave('private-game.input');
+        window.Echo.leave(roomChannelName.value);
     }
 });
 </script>
@@ -305,12 +316,13 @@ onUnmounted(() => {
     <div class="relative w-screen h-screen overflow-hidden bg-slate-950 text-white font-sans select-none">
         <canvas ref="canvasRef" style="touch-action: none; width: 100vw; height: 100vh; display: block;"></canvas>
 
-        <!-- Меню входа -->
+        <!-- Меню входа / Лобби инфо -->
         <div v-if="!isPlaying && !isDead" class="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm z-50">
             <div class="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl text-center max-w-md w-full">
-                <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-linear-to-r from-cyan-400 to-blue-600 mb-2">
-                    Snake MMO
+                <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-1">
+                    {{ room?.name || 'Snake MMO' }}
                 </h1>
+                <p v-if="room?.code" class="text-xs font-mono text-emerald-400 mb-3">Код комнаты: {{ room.code }}</p>
                 <p class="text-slate-400 mb-4">Игрок: <span class="text-white font-bold">{{ user.name }}</span></p>
 
                 <div class="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 p-3 rounded-xl mb-4">
@@ -385,10 +397,10 @@ onUnmounted(() => {
 
         <!-- Окно гибели (Game Over) -->
         <div v-if="isDead" class="absolute inset-0 flex items-center justify-center bg-red-950/80 backdrop-blur-md z-50">
-            <div class="bg-slate-900 border border-red-500/30 p-8 rounded-2xl shadow-2xl text-center max-w-md w-full animate-bounce-short">
+            <div class="bg-slate-900 border border-red-500/30 p-8 rounded-2xl shadow-2xl text-center max-w-md w-full">
                 <h2 class="text-3xl font-black text-red-500 mb-2">ВАС УБИЛИ!</h2>
                 <p class="text-slate-300 text-lg mb-6">Длина змейки: <span class="text-amber-400 font-bold">{{ finalScore }}</span></p>
-                <button @click="spawnSnake" class="w-full py-4 bg-linear-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 font-bold rounded-xl text-lg shadow-lg shadow-green-500/30 transition transform active:scale-95">Респавн</button>
+                <button @click="spawnSnake" class="w-full py-4 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 font-bold rounded-xl text-lg shadow-lg shadow-green-500/30 transition transform active:scale-95">Респавн</button>
             </div>
         </div>
 
@@ -405,7 +417,7 @@ onUnmounted(() => {
                 <h3 class="font-bold text-slate-400 border-b border-slate-800 pb-1 sm:pb-2 mb-1 sm:mb-2 uppercase tracking-wider">Рейтинг (Top 10)</h3>
                 <div class="space-y-0.5 sm:space-y-1">
                     <div v-for="(s, idx) in leaderboard" :key="idx" class="flex justify-between items-center" :class="{ 'text-cyan-400 font-bold': String(s.u ?? s.username) === String(user.name) }">
-                        <span class="truncate max-w-17.5 sm:max-w-30">{{ idx + 1 }}. {{ s.u ?? s.username }}</span>
+                        <span class="truncate max-w-[70px] sm:max-w-[120px]">{{ idx + 1 }}. {{ s.u ?? s.username }}</span>
                         <span class="font-mono text-amber-400">{{ s.score ?? s.p?.length ?? s.segments?.length ?? 0 }}</span>
                     </div>
                 </div>

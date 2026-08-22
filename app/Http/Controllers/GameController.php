@@ -7,12 +7,12 @@ use App\Domain\Game\Entities\SnakeSegment;
 use App\Domain\Game\Services\GameSessionService;
 use App\Domain\Game\ValueObjects\Point;
 use App\Infrastructure\Game\Repositories\RedisGameStateRepository;
+use App\Models\Room;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
 use Inertia\Response;
-use Random\RandomException;
 
 final class GameController extends Controller
 {
@@ -21,18 +21,36 @@ final class GameController extends Controller
         private readonly GameSessionService $gameSessionService,
     ) {}
 
-    public function index(Request $request): Response
+    /**
+     * Отображение игровой комнаты.
+     */
+    public function room(Request $request, string $code): Response
     {
+        $room = Room::where('code', $code)->firstOrFail();
+        $user = $request->user();
+
         return Inertia::render('Game/Index', [
-            'user' => $request->user(),
+            'room' => $room,
+            'auth' => [
+                'user' => $user ? [
+                    'id'     => $user->id,
+                    'name'   => $user->name,
+                    'coins'  => $user->coins ?? 0,
+                    'energy' => $user->energy ?? 0,
+                ] : null,
+            ],
         ]);
     }
 
     /**
-     * @throws RandomException
+     * Спавн змейки в игровой комнате.
      */
     public function spawn(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'room_code' => 'required|string|exists:rooms,code',
+        ]);
+
         $user = $request->user();
 
         if ($user->energy < 1) {
@@ -40,9 +58,7 @@ final class GameController extends Controller
         }
         $user->decrement('energy', 1);
 
-        // Списываем экипированные перки пользователя и получаем баланс на раунд
         $equippedBuffs = $this->gameSessionService->prepareMatchLoadout($user);
-
         $snakeId = 'snake_' . $user->id . '_' . Str::random(6);
 
         $startX = (float) random_int(500, 4500);
@@ -66,23 +82,45 @@ final class GameController extends Controller
             equippedBuffs: $equippedBuffs,
         );
 
-        // Записываем только созданную змейку без перезаписи остальных элементов в Redis
-        $this->repository->saveSnake($snake);
+        $this->repository->saveSnake($validated['room_code'], $snake);
 
-        // Получаем еду из Redis для передачи клиенту
         $foods = array_map(static fn ($f) => [
-            'id' => (string) $f->id,
-            'x' => (float) $f->position->x,
-            'y' => (float) $f->position->y,
+            'id'    => (string) $f->id,
+            'x'     => (float) $f->position->x,
+            'y'     => (float) $f->position->y,
             'color' => (string) $f->color,
             'value' => (int) $f->value,
-        ], $this->repository->getFoods());
+        ], $this->repository->getFoods($validated['room_code']));
 
         return response()->json([
-            'snake_id' => $snakeId,
-            'color' => $color,
+            'snake_id'       => $snakeId,
+            'color'          => $color,
             'start_position' => ['x' => $startX, 'y' => $startY],
-            'foods' => $foods,
+            'foods'          => $foods,
         ]);
+    }
+
+    /**
+     * Обработка клиентского ввода (направление, буст, активация способностей).
+     */
+    public function input(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'room_code' => 'required|string|exists:rooms,code',
+            'snake_id'  => 'required|string',
+            'angle'     => 'required|numeric',
+            'boost'     => 'required|boolean',
+            'ability'   => 'nullable|string',
+        ]);
+
+        $this->repository->updateSnakeInput(
+            roomCode: $validated['room_code'],
+            snakeId: $validated['snake_id'],
+            angle: (float) $validated['angle'],
+            boost: (bool) $validated['boost'],
+            ability: $validated['ability'] ?? null
+        );
+
+        return response()->json(['status' => 'ok']);
     }
 }

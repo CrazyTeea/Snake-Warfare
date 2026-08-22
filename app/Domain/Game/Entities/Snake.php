@@ -26,6 +26,7 @@ final class Snake
         public array $equippedBuffs = [],
         public array $buffTimers = [],
         public int $boostTicks = 0,
+        public bool $boost = false,
     ) {}
 
     public function getHead(): Point

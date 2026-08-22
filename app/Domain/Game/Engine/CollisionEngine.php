@@ -102,8 +102,10 @@ final class CollisionEngine
         }));
 
         // 4. Коллизии голова -> тело
+        // 4. Коллизии голова -> тело
         foreach ($snakes as $attacker) {
-            if ($attacker->shieldActive || empty($attacker->segments)) {
+            // 🛡️ Добавили проверку инвиза: невидимая змейка не должна врезаться и получать урон
+            if ($attacker->shieldActive || $attacker->invisible || empty($attacker->segments)) {
                 continue;
             }
 
@@ -122,10 +124,16 @@ final class CollisionEngine
                 foreach ($segmentGrid[$key] as $targetData) {
                     /** @var Snake $victim */
                     $victim = $targetData['snake'];
+
+                    // 👻 Если жертва в инвизе, сквозь нее можно проходить (нет коллизии)
+                    if ($victim->invisible) {
+                        continue;
+                    }
+
                     $segIndex = (int) $targetData['index'];
                     $segment = $targetData['segment'];
 
-                    // 🛡️ Защита от случайного врезания в себя при поворотах (первые 4 сегмента не уязвимы)
+                    // Защита от самопоедания
                     if ($attacker->id === $victim->id && $segIndex <= self::SELF_COLLISION_SAFE_INDEX) {
                         continue;
                     }
@@ -144,6 +152,7 @@ final class CollisionEngine
                     }
                 }
             }
+            // ... дальнейшая логика урона
 
             if ($closestCollision !== null) {
                 /** @var Snake $victim */
