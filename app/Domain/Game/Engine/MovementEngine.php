@@ -14,22 +14,6 @@ final class MovementEngine
 
     public function move(Snake $snake, float $angle, bool $boost, ?string $requestedAbility = null): ?Food
     {
-        $now = microtime(true);
-
-        // 🛡️ / 👻 Активация абилки из экипированного инвентаря
-        if ($requestedAbility && isset($snake->equippedBuffs[$requestedAbility])) {
-            $buff = &$snake->equippedBuffs[$requestedAbility];
-
-            if ($buff['count'] > 0 && ($snake->buffTimers[$requestedAbility] ?? 0) < $now) {
-                $buff['count']--;
-                $snake->buffTimers[$requestedAbility] = $now + 5.0; // 5 секунд активности
-            }
-        }
-
-        // Обновление состояний активности щита и невидимости
-        $snake->shieldActive = ($snake->buffTimers['shield'] ?? 0) > $now;
-        $snake->invisible = ($snake->buffTimers['invisible'] ?? 0) > $now;
-
         $snake->angle = $angle;
 
         // 🚀 BOOST
@@ -40,13 +24,13 @@ final class MovementEngine
             return null;
         }
 
-        // 1. Движение головы
+        // 1. Движение головы с ограничением арены
         $head = $snake->segments[0]->position;
         $newHeadX = max(0.0, min(self::MAP_SIZE, $head->x + cos($angle) * $snake->speed));
         $newHeadY = max(0.0, min(self::MAP_SIZE, $head->y + sin($angle) * $snake->speed));
         $snake->segments[0]->position = new Point($newHeadX, $newHeadY);
 
-        // 2. Движение тела
+        // 2. Движение тела по цепочке
         for ($i = 1; $i < count($snake->segments); $i++) {
             $prev = $snake->segments[$i - 1]->position;
             $curr = $snake->segments[$i]->position;

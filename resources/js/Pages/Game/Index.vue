@@ -9,6 +9,7 @@ const props = defineProps({ user: Object });
 const canvasRef = ref(null);
 const isPlaying = ref(false);
 const isDead = ref(false);
+const showShopModal = ref(false);
 const finalScore = ref(0);
 
 const currentSnakeId = ref(null);
@@ -17,10 +18,15 @@ const activeSnakes = ref([]);
 const serverLeaderboard = ref([]);
 const requestedAbility = ref(null);
 
+const userCoins = ref(props.user.coins || 0);
+const userBuffs = ref(props.user.equipped_buffs || { shield: { count: 0 }, invisible: { count: 0 } });
+
 let renderer = null;
 let animationFrameId = null;
 let inputInterval = null;
 let currentAngle = 0;
+let lastRenderTime = performance.now();
+const touchOptions = { passive: false };
 
 const logout = () => {
     router.post('/logout');
@@ -37,8 +43,19 @@ const buyCoins = async () => {
     }
 };
 
+const buyBuff = async (type) => {
+    try {
+        const res = await axios.post('/api/shop/buy-buff', { type });
+        userCoins.value = res.data.coins;
+        userBuffs.value = res.data.equipped_buffs;
+    } catch (e) {
+        alert(e.response?.data?.message || 'Ошибка покупки');
+    }
+};
+
 const triggerAbility = (type) => {
-    if (mySnake.value?.equippedBuffs?.[type]?.count > 0) {
+    const currentCount = mySnake.value?.equippedBuffs?.[type]?.count ?? userBuffs.value?.[type]?.count ?? 0;
+    if (currentCount > 0) {
         requestedAbility.value = type;
     }
 };
@@ -48,20 +65,33 @@ const leaderboard = computed(() => {
         return serverLeaderboard.value;
     }
     return [...activeSnakes.value]
-        .sort((a, b) => (b.segments?.length || 0) - (a.segments?.length || 0))
+        .sort((a, b) => {
+            const lenA = a.p?.length ?? a.segments?.length ?? 0;
+            const lenB = b.p?.length ?? b.segments?.length ?? 0;
+            return lenB - lenA;
+        })
         .slice(0, 10);
 });
 
+// Исправлено: поддержка как стандартного, так и сжатого формата от сервера (s.i ?? s.id)
 const mySnake = computed(() => {
-    return activeSnakes.value.find(s => String(s.id) === String(currentSnakeId.value));
+    if (!currentSnakeId.value) return null;
+    return activeSnakes.value.find(s => String(s.i ?? s.id) === String(currentSnakeId.value));
 });
 
-const myScore = computed(() => mySnake.value ? mySnake.value.segments.length : 0);
+const myScore = computed(() => {
+    if (!mySnake.value) return 0;
+    return mySnake.value.p?.length ?? mySnake.value.segments?.length ?? 0;
+});
 
 const myRank = computed(() => {
     if (!mySnake.value) return '-';
-    const sorted = [...activeSnakes.value].sort((a, b) => (b.segments?.length || 0) - (a.segments?.length || 0));
-    const index = sorted.findIndex(s => String(s.id) === String(currentSnakeId.value));
+    const sorted = [...activeSnakes.value].sort((a, b) => {
+        const lenA = a.p?.length ?? a.segments?.length ?? 0;
+        const lenB = b.p?.length ?? b.segments?.length ?? 0;
+        return lenB - lenA;
+    });
+    const index = sorted.findIndex(s => String(s.i ?? s.id) === String(currentSnakeId.value));
     return index !== -1 ? index + 1 : '-';
 });
 
@@ -91,6 +121,7 @@ const spawnSnake = async () => {
             angle: 0,
             shieldActive: false,
             invisible: false,
+            equippedBuffs: userBuffs.value,
             segments: [
                 { x: startPos.x, y: startPos.y },
                 { x: startPos.x - 15, y: startPos.y },
@@ -98,7 +129,7 @@ const spawnSnake = async () => {
             ]
         };
 
-        renderer.updateServerState([initialSnake], [], []);
+        renderer.updateServerState({ snakes: [initialSnake] });
         isPlaying.value = true;
     } catch (error) {
         console.error('Failed to spawn snake:', error);
@@ -151,8 +182,11 @@ const sendPlayerInput = () => {
     requestedAbility.value = null;
 };
 
-const renderLoop = () => {
-    if (renderer) renderer.render();
+const renderLoop = (timestamp) => {
+    const dt = Math.min((timestamp - lastRenderTime) / 1000, 0.1);
+    lastRenderTime = timestamp || performance.now();
+
+    if (renderer) renderer.render(dt);
     animationFrameId = requestAnimationFrame(renderLoop);
 };
 
@@ -160,8 +194,8 @@ onMounted(() => {
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('touchstart', handleTouchMove, { passive: false });
-    window.addEventListener('touchmove', handleTouchMove, { passive: false });
+    window.addEventListener('touchstart', handleTouchMove, touchOptions);
+    window.addEventListener('touchmove', handleTouchMove, touchOptions);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
@@ -170,15 +204,25 @@ onMounted(() => {
     if (window.Echo) {
         window.Echo.channel('game.world')
             .listen('.game.tick', (event) => {
-                activeSnakes.value = event.snakes || [];
-                if (event.leaderboard) {
-                    serverLeaderboard.value = event.leaderboard;
+                if (!event) return;
+
+                const snakes = event.s || event.snakes || [];
+                activeSnakes.value = snakes;
+
+                if (event.l || event.leaderboard) {
+                    serverLeaderboard.value = event.l || event.leaderboard;
                 }
-                renderer.updateServerState(event.snakes, event.eatenFoodIds, event.spawnedFood);
+
+                renderer.updateServerState(event);
 
                 if (currentSnakeId.value) {
-                    const alive = event.snakes.some(s => String(s.id) === String(currentSnakeId.value));
-                    if (!alive && isPlaying.value) {
+                    const myServerData = snakes.find(s => String(s.i ?? s.id) === String(currentSnakeId.value));
+                    if (myServerData) {
+                        const buffs = myServerData.b ?? myServerData.equippedBuffs;
+                        if (buffs) userBuffs.value = buffs;
+                    }
+
+                    if (!myServerData && isPlaying.value) {
                         finalScore.value = myScore.value;
                         isPlaying.value = false;
                         isDead.value = true;
@@ -191,6 +235,7 @@ onMounted(() => {
         window.Echo.private('game.input');
     }
 
+    lastRenderTime = performance.now();
     animationFrameId = requestAnimationFrame(renderLoop);
     inputInterval = setInterval(sendPlayerInput, 50);
 });
@@ -198,16 +243,18 @@ onMounted(() => {
 onUnmounted(() => {
     window.removeEventListener('resize', resizeCanvas);
     window.removeEventListener('mousemove', handleMouseMove);
-    window.removeEventListener('touchstart', handleTouchMove);
-    window.removeEventListener('touchmove', handleTouchMove);
+    window.removeEventListener('touchstart', handleTouchMove, touchOptions);
+    window.removeEventListener('touchmove', handleTouchMove, touchOptions);
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
 
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
     if (inputInterval) clearInterval(inputInterval);
+
+    // Исправлено: использование Echo.leave() вместо отсутствующего Echo.leaveChannel()
     if (window.Echo) {
-        window.Echo.leaveChannel('game.world');
-        window.Echo.leaveChannel('private-game.input');
+        window.Echo.leave('game.world');
+        window.Echo.leave('private-game.input');
     }
 });
 </script>
@@ -224,16 +271,16 @@ onUnmounted(() => {
                 </h1>
                 <p class="text-slate-400 mb-4">Игрок: <span class="text-white font-bold">{{ user.name }}</span></p>
 
-                <div class="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 p-3 rounded-xl mb-6">
+                <div class="flex items-center justify-between bg-slate-800/80 border border-slate-700/50 p-3 rounded-xl mb-4">
                     <div class="text-left">
                         <span class="text-xs text-slate-400 block">Баланс монет</span>
-                        <span class="text-lg font-black text-amber-400 font-mono">{{ user.coins || 0 }} 🪙</span>
+                        <span class="text-lg font-black text-amber-400 font-mono">{{ userCoins }} 🪙</span>
                     </div>
                     <button
                         @click="buyCoins"
-                        class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-sm transition transform active:scale-95 shadow-md shadow-emerald-600/30"
+                        class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition transform active:scale-95 shadow-md shadow-emerald-600/30"
                     >
-                        + Пополнить (100₽)
+                        +100₽
                     </button>
                 </div>
 
@@ -246,12 +293,51 @@ onUnmounted(() => {
                     </button>
 
                     <button
+                        @click="showShopModal = true"
+                        class="w-full py-3 bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 font-bold rounded-xl transition transform active:scale-95"
+                    >
+                        🛒 Магазин баффов
+                    </button>
+
+                    <button
                         @click="logout"
                         class="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl border border-slate-700 transition transform active:scale-95"
                     >
                         Выйти из аккаунта
                     </button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Модалка Магазина -->
+        <div v-if="showShopModal" class="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-md z-50">
+            <div class="bg-slate-900 border border-purple-500/30 p-6 rounded-2xl max-w-md w-full shadow-2xl">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-purple-400">Магазин Способностей</h2>
+                    <button @click="showShopModal = false" class="text-slate-400 hover:text-white text-xl">✕</button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700 text-center flex flex-col items-center justify-between">
+                        <div>
+                            <div class="text-3xl mb-2">🛡️</div>
+                            <h3 class="font-bold mb-1">Щит (+10)</h3>
+                            <p class="text-[11px] text-slate-400 mb-3">Защита от тарана</p>
+                        </div>
+                        <button @click="buyBuff('shield')" class="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-lg text-xs transition active:scale-95">20 🪙</button>
+                    </div>
+
+                    <div class="bg-slate-800/80 p-4 rounded-xl border border-slate-700 text-center flex flex-col items-center justify-between">
+                        <div>
+                            <div class="text-3xl mb-2">👻</div>
+                            <h3 class="font-bold mb-1">Невидимость (+10)</h3>
+                            <p class="text-[11px] text-slate-400 mb-3">Скрывает с радаров</p>
+                        </div>
+                        <button @click="buyBuff('invisible')" class="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-lg text-xs transition active:scale-95">30 🪙</button>
+                    </div>
+                </div>
+
+                <button @click="showShopModal = false" class="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl border border-slate-700">Закрыть</button>
             </div>
         </div>
 
@@ -276,9 +362,9 @@ onUnmounted(() => {
             <div class="absolute top-2 right-2 sm:top-4 sm:right-4 bg-slate-900/85 backdrop-blur border border-slate-800 p-2 sm:p-4 rounded-xl text-[10px] sm:text-xs w-36 sm:w-56 shadow-xl z-10">
                 <h3 class="font-bold text-slate-400 border-b border-slate-800 pb-1 sm:pb-2 mb-1 sm:mb-2 uppercase tracking-wider">Рейтинг (Top 10)</h3>
                 <div class="space-y-0.5 sm:space-y-1">
-                    <div v-for="(s, idx) in leaderboard" :key="idx" class="flex justify-between items-center" :class="{ 'text-cyan-400 font-bold': String(s.username) === String(user.name) }">
-                        <span class="truncate max-w-17.5 sm:max-w-30">{{ idx + 1 }}. {{ s.username }}</span>
-                        <span class="font-mono text-amber-400">{{ s.score ?? s.segments?.length ?? 0 }}</span>
+                    <div v-for="(s, idx) in leaderboard" :key="idx" class="flex justify-between items-center" :class="{ 'text-cyan-400 font-bold': String(s.u ?? s.username) === String(user.name) }">
+                        <span class="truncate max-w-17.5 sm:max-w-30">{{ idx + 1 }}. {{ s.u ?? s.username }}</span>
+                        <span class="font-mono text-amber-400">{{ s.score ?? s.p?.length ?? s.segments?.length ?? 0 }}</span>
                     </div>
                 </div>
             </div>
@@ -288,24 +374,24 @@ onUnmounted(() => {
                 <button
                     @click="triggerAbility('shield')"
                     class="relative flex flex-col items-center justify-center w-14 h-14 rounded-xl border-2 transition active:scale-95 bg-slate-900/90 backdrop-blur"
-                    :class="mySnake?.shieldActive ? 'border-cyan-400 bg-cyan-950/50 shadow-lg shadow-cyan-500/20' : 'border-slate-700 hover:border-slate-500'"
+                    :class="(mySnake?.sh ?? mySnake?.shieldActive) ? 'border-cyan-400 bg-cyan-950/50 shadow-lg shadow-cyan-500/20' : 'border-slate-700 hover:border-slate-500'"
                 >
                     <span class="text-xl">🛡️</span>
                     <span class="text-[9px] font-bold text-slate-400">[1]</span>
                     <span class="absolute -top-2 -right-2 bg-cyan-500 text-slate-950 font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center border border-slate-900">
-                        {{ mySnake?.equippedBuffs?.shield?.count ?? 0 }}
+                        {{ mySnake?.b?.shield?.count ?? mySnake?.equippedBuffs?.shield?.count ?? userBuffs?.shield?.count ?? 0 }}
                     </span>
                 </button>
 
                 <button
                     @click="triggerAbility('invisible')"
                     class="relative flex flex-col items-center justify-center w-14 h-14 rounded-xl border-2 transition active:scale-95 bg-slate-900/90 backdrop-blur"
-                    :class="mySnake?.invisible ? 'border-purple-400 bg-purple-950/50 shadow-lg shadow-purple-500/20' : 'border-slate-700 hover:border-slate-500'"
+                    :class="(mySnake?.inv ?? mySnake?.invisible) ? 'border-purple-400 bg-purple-950/50 shadow-lg shadow-purple-500/20' : 'border-slate-700 hover:border-slate-500'"
                 >
                     <span class="text-xl">👻</span>
                     <span class="text-[9px] font-bold text-slate-400">[2]</span>
                     <span class="absolute -top-2 -right-2 bg-purple-500 text-white font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center border border-slate-900">
-                        {{ mySnake?.equippedBuffs?.invisible?.count ?? 0 }}
+                        {{ mySnake?.b?.invisible?.count ?? mySnake?.equippedBuffs?.invisible?.count ?? userBuffs?.invisible?.count ?? 0 }}
                     </span>
                 </button>
             </div>

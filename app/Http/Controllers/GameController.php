@@ -66,9 +66,8 @@ final class GameController extends Controller
             equippedBuffs: $equippedBuffs,
         );
 
-        $snakes = $this->repository->getSnakes();
-        $snakes[] = $snake;
-        $this->repository->saveSnakes($snakes);
+        // Записываем только созданную змейку без перезаписи остальных элементов в Redis
+        $this->repository->saveSnake($snake);
 
         // Получаем еду из Redis для передачи клиенту
         $foods = array_map(static fn ($f) => [

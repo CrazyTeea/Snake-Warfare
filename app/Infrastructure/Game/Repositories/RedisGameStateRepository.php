@@ -30,7 +30,7 @@ final class RedisGameStateRepository
             }
 
             $segments = array_map(
-                static fn (array $s): SnakeSegment => new SnakeSegment(new Point((float) $s['x'], (float) $s['y'])),
+                static fn (array $s): SnakeSegment => new SnakeSegment(new Point((float) ($s['x'] ?? 0), (float) ($s['y'] ?? 0))),
                 $data['segments'] ?? []
             );
 
@@ -53,18 +53,46 @@ final class RedisGameStateRepository
         return $snakes;
     }
 
+    public function saveSnake(Snake $snake): void
+    {
+        $payload = json_encode([
+            'id' => $snake->id,
+            'user_id' => $snake->userId,
+            'username' => $snake->username,
+            'color' => $snake->color,
+            'speed' => $snake->speed,
+            'angle' => $snake->angle,
+            'shield_active' => $snake->shieldActive,
+            'invisible' => $snake->invisible,
+            'segments' => array_map(
+                static fn (SnakeSegment $s): array => ['x' => $s->position->x, 'y' => $s->position->y],
+                $snake->segments
+            ),
+            'equipped_buffs' => $snake->equippedBuffs,
+            'buff_timers' => $snake->buffTimers,
+            'boost_ticks' => $snake->boostTicks,
+        ]);
+
+        Redis::hset(self::SNAKES_KEY, $snake->id, $payload);
+    }
+
     /**
      * @param Snake[] $snakes
      */
     public function saveSnakes(array $snakes): void
     {
+        Redis::del(self::SNAKES_KEY);
+
         if (empty($snakes)) {
-            Redis::del(self::SNAKES_KEY);
             return;
         }
 
         $payload = [];
         foreach ($snakes as $snake) {
+            if (!$snake instanceof Snake) {
+                continue;
+            }
+
             $payload[$snake->id] = json_encode([
                 'id' => $snake->id,
                 'user_id' => $snake->userId,
@@ -84,7 +112,9 @@ final class RedisGameStateRepository
             ]);
         }
 
-        Redis::hmset(self::SNAKES_KEY, $payload);
+        if (!empty($payload)) {
+            Redis::hmset(self::SNAKES_KEY, $payload);
+        }
     }
 
     public function removeSnake(string $snakeId): void
@@ -110,9 +140,9 @@ final class RedisGameStateRepository
 
             $foods[] = new Food(
                 id: (string) $data['id'],
-                position: new Point((float) $data['x'], (float) $data['y']),
-                value: (int) $data['value'],
-                color: (string) $data['color'],
+                position: new Point((float) ($data['x'] ?? 0), (float) ($data['y'] ?? 0)),
+                value: (int) ($data['value'] ?? 1),
+                color: (string) ($data['color'] ?? '#38bdf8'),
             );
         }
 
@@ -120,27 +150,44 @@ final class RedisGameStateRepository
     }
 
     /**
-     * @param Food[] $foods
+     * @param array<int, Food|array> $foods
      */
     public function saveFoods(array $foods): void
     {
+        // Очищаем старые значения еды в Redis, чтобы исключить утечку памяти
+        Redis::del(self::FOODS_KEY);
+
         if (empty($foods)) {
-            Redis::del(self::FOODS_KEY);
             return;
         }
 
         $payload = [];
         foreach ($foods as $food) {
-            $payload[$food->id] = json_encode([
-                'id' => $food->id,
-                'x' => $food->position->x,
-                'y' => $food->position->y,
-                'value' => $food->value,
-                'color' => $food->color,
-            ]);
+            if ($food instanceof Food) {
+                $payload[$food->id] = json_encode([
+                    'id' => $food->id,
+                    'x' => $food->position->x,
+                    'y' => $food->position->y,
+                    'value' => $food->value,
+                    'color' => $food->color,
+                ]);
+            } elseif (is_array($food)) {
+                $fId = (string) ($food['id'] ?? '');
+                if ($fId !== '') {
+                    $payload[$fId] = json_encode([
+                        'id' => $fId,
+                        'x' => (float) ($food['x'] ?? 0),
+                        'y' => (float) ($food['y'] ?? 0),
+                        'value' => (int) ($food['value'] ?? 1),
+                        'color' => (string) ($food['color'] ?? '#38bdf8'),
+                    ]);
+                }
+            }
         }
 
-        Redis::hmset(self::FOODS_KEY, $payload);
+        if (!empty($payload)) {
+            Redis::hmset(self::FOODS_KEY, $payload);
+        }
     }
 
     public function updatePlayerInput(string $snakeId, float $angle, bool $boost, ?string $ability = null): void

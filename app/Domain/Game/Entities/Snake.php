@@ -10,8 +10,8 @@ final class Snake
 {
     /**
      * @param SnakeSegment[] $segments
-     * @param array<string, array{count: int, max: int}> $equippedBuffs
-     * @param array<string, float> $buffTimers
+     * @param array<string, array{count: int}> $equippedBuffs
+     * @param array<string, int> $buffTimers
      */
     public function __construct(
         public string $id,
@@ -36,6 +36,42 @@ final class Snake
     public function getLength(): int
     {
         return count($this->segments);
+    }
+
+    public function tickBuffs(): void
+    {
+        foreach ($this->buffTimers as $type => $ticks) {
+            if ($ticks > 0) {
+                $this->buffTimers[$type]--;
+                if ($this->buffTimers[$type] <= 0) {
+                    if ($type === 'shield') {
+                        $this->shieldActive = false;
+                    } elseif ($type === 'invisible') {
+                        $this->invisible = false;
+                    }
+                    unset($this->buffTimers[$type]);
+                }
+            }
+        }
+    }
+
+    public function activateBuff(string $type, int $durationTicks = 200): bool
+    {
+        $count = $this->equippedBuffs[$type]['count'] ?? 0;
+        if ($count <= 0) {
+            return false;
+        }
+
+        $this->equippedBuffs[$type]['count']--;
+        $this->buffTimers[$type] = $durationTicks;
+
+        if ($type === 'shield') {
+            $this->shieldActive = true;
+        } elseif ($type === 'invisible') {
+            $this->invisible = true;
+        }
+
+        return true;
     }
 
     /**

@@ -15,6 +15,9 @@ final class CollisionEngine
     public const float FOOD_RADIUS = 10.0;
     public const float IMPACT_BASE_FORCE = 3.0;
 
+    // Количество первых сегментов (шея), защищенных от случайного самопоедания при поворотах
+    public const int SELF_COLLISION_SAFE_INDEX = 4;
+
     public function __construct(
         private readonly SpatialHashGrid $grid = new SpatialHashGrid(),
         private readonly FoodSpawner $foodSpawner = new FoodSpawner(),
@@ -22,7 +25,7 @@ final class CollisionEngine
 
     /**
      * @param Snake[] $snakes
-     * @param Food[] $foods
+     * @param array<int, Food|array> $foods
      */
     public function process(array &$snakes, array &$foods): CollisionResult
     {
@@ -34,15 +37,18 @@ final class CollisionEngine
         $segmentGrid = [];
         $foodGrid = [];
 
-        // 1. Индексация объектов в Spatial Hash Grid
+        // 1. Индексация еды
         foreach ($foods as $food) {
-            $key = $this->grid->getCellKey($food->position);
+            $pos = $food instanceof Food ? $food->position : new Point((float) ($food['x'] ?? 0), (float) ($food['y'] ?? 0));
+            $key = $this->grid->getCellKey($pos);
             $foodGrid[$key][] = $food;
         }
 
+        // 2. Индексация сегментов змей
         foreach ($snakes as $snake) {
             foreach ($snake->segments as $index => $segment) {
-                $key = $this->grid->getCellKey($segment->position);
+                $pos = $segment instanceof SnakeSegment ? $segment->position : new Point((float) ($segment['x'] ?? 0), (float) ($segment['y'] ?? 0));
+                $key = $this->grid->getCellKey($pos);
                 $segmentGrid[$key][] = [
                     'snake' => $snake,
                     'index' => $index,
@@ -51,11 +57,16 @@ final class CollisionEngine
             }
         }
 
-        // 2. Поедание еды (невидимые змейки также едят еду)
+        // 3. Поедание еды
         $eatenFoodIds = [];
         foreach ($snakes as $snake) {
-            $head = $snake->getHead();
-            $nearbyKeys = $this->grid->getNearbyCellKeys($head);
+            if (empty($snake->segments)) {
+                continue;
+            }
+
+            $headSeg = $snake->segments[0];
+            $headPos = $headSeg instanceof SnakeSegment ? $headSeg->position : new Point((float) ($headSeg['x'] ?? 0), (float) ($headSeg['y'] ?? 0));
+            $nearbyKeys = $this->grid->getNearbyCellKeys($headPos);
 
             foreach ($nearbyKeys as $key) {
                 if (!isset($foodGrid[$key])) {
@@ -63,34 +74,42 @@ final class CollisionEngine
                 }
 
                 foreach ($foodGrid[$key] as $food) {
-                    if (in_array($food->id, $eatenFoodIds, true)) {
+                    $fId = $food instanceof Food ? (string) $food->id : (string) ($food['id'] ?? '');
+                    $fPos = $food instanceof Food ? $food->position : new Point((float) ($food['x'] ?? 0), (float) ($food['y'] ?? 0));
+
+                    if (in_array($fId, $eatenFoodIds, true)) {
                         continue;
                     }
 
-                    if ($head->distanceTo($food->position) <= (self::HEAD_RADIUS + self::FOOD_RADIUS)) {
-                        $eatenFoodIds[] = $food->id;
-                        $eatenFood[] = $food;
+                    // Чуть увеличенный радиус подбора еды для предотвращения пролетов при высоком ping/tickrate
+                    if ($headPos->distanceTo($fPos) <= (self::HEAD_RADIUS + self::FOOD_RADIUS + 3.0)) {
+                        $eatenFoodIds[] = $fId;
+                        $eatenFood[] = $fId;
 
-                        $lastSeg = end($snake->segments);
+                        $lastSeg = $snake->segments[count($snake->segments) - 1] ?? null;
                         if ($lastSeg) {
-                            $snake->segments[] = new SnakeSegment(new Point($lastSeg->position->x, $lastSeg->position->y));
+                            $lastPos = $lastSeg instanceof SnakeSegment ? $lastSeg->position : new Point((float) ($lastSeg['x'] ?? 0), (float) ($lastSeg['y'] ?? 0));
+                            $snake->segments[] = new SnakeSegment(new Point($lastPos->x, $lastPos->y));
                         }
                     }
                 }
             }
         }
 
-        $foods = array_values(array_filter($foods, static fn (Food $f): bool => !in_array($f->id, $eatenFoodIds, true)));
+        $foods = array_values(array_filter($foods, static function ($f) use ($eatenFoodIds): bool {
+            $id = $f instanceof Food ? (string) $f->id : (string) ($f['id'] ?? '');
+            return !in_array($id, $eatenFoodIds, true);
+        }));
 
-        // 3. Коллизии голова -> тело
+        // 4. Коллизии голова -> тело
         foreach ($snakes as $attacker) {
-            // 🛡️ SHIELD: Атакующий под щитом игнорирует врезания
-            if ($attacker->shieldActive) {
+            if ($attacker->shieldActive || empty($attacker->segments)) {
                 continue;
             }
 
-            $head = $attacker->getHead();
-            $nearbyKeys = $this->grid->getNearbyCellKeys($head);
+            $headSeg = $attacker->segments[0];
+            $headPos = $headSeg instanceof SnakeSegment ? $headSeg->position : new Point((float) ($headSeg['x'] ?? 0), (float) ($headSeg['y'] ?? 0));
+            $nearbyKeys = $this->grid->getNearbyCellKeys($headPos);
 
             $closestCollision = null;
             $minDistance = INF;
@@ -104,15 +123,16 @@ final class CollisionEngine
                     /** @var Snake $victim */
                     $victim = $targetData['snake'];
                     $segIndex = (int) $targetData['index'];
-                    /** @var SnakeSegment $segment */
                     $segment = $targetData['segment'];
 
-                    // Игнорирование врезания в себя (первые 3 сегмента)
-                    if ($attacker->id === $victim->id && $segIndex <= 2) {
+                    // 🛡️ Защита от случайного врезания в себя при поворотах (первые 4 сегмента не уязвимы)
+                    if ($attacker->id === $victim->id && $segIndex <= self::SELF_COLLISION_SAFE_INDEX) {
                         continue;
                     }
 
-                    $dist = $head->distanceTo($segment->position);
+                    $segPos = $segment instanceof SnakeSegment ? $segment->position : new Point((float) ($segment['x'] ?? 0), (float) ($segment['y'] ?? 0));
+                    $dist = $headPos->distanceTo($segPos);
+
                     if ($dist <= (self::HEAD_RADIUS + self::SEGMENT_RADIUS)) {
                         if ($dist < $minDistance) {
                             $minDistance = $dist;
@@ -131,7 +151,7 @@ final class CollisionEngine
                 $segIndex = $closestCollision['segIndex'];
 
                 if ($attacker->color === $victim->color) {
-                    // ОДИНАКОВЫЙ ЦВЕТ: Жертва теряет хвост
+                    // Тот же цвет (включая намеренное кольцевание вокруг своего хвоста)
                     if ($segIndex > 0 && $segIndex < count($victim->segments)) {
                         $severed = $victim->truncateTailFromIndex($segIndex);
                         $newFood = $this->foodSpawner->convertSegmentsToFood($severed, $victim->color);
@@ -139,7 +159,7 @@ final class CollisionEngine
                         array_push($spawnedFood, ...$newFood);
                     }
                 } else {
-                    // РАЗНЫЙ ЦВЕТ: Атакующий получает урон
+                    // Разный цвет: урон атакующему
                     $speedMultiplier = $attacker->speed / 6.0;
                     $damage = (int) max(1, ceil(self::IMPACT_BASE_FORCE * $speedMultiplier * 2));
 
@@ -152,6 +172,11 @@ final class CollisionEngine
 
                     if (count($attacker->segments) <= 1) {
                         $deadSnakeIds[] = $attacker->id;
+
+                        $remainsFood = $this->foodSpawner->convertSegmentsToFood($attacker->segments, $attacker->color);
+                        array_push($foods, ...$remainsFood);
+                        array_push($spawnedFood, ...$remainsFood);
+                        $attacker->segments = [];
                     }
                 }
             }
