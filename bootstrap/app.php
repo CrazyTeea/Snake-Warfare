@@ -20,6 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
         $middleware->statefulApi();
         $middleware->trustProxies(at: '*');
+        $middleware->redirectTo(
+            guests: '/',
+            users: '/game'
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

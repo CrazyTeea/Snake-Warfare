@@ -9,7 +9,7 @@ use Inertia\Inertia;
 
 // Главная / Домашняя страница
 Route::get('/', function () {
-    return Inertia::render('Welcome', [
+    return Auth::check() ? redirect()->route('game.index') : Inertia::render('Welcome', [
         'canLogin' => Route::has('login'),
         'canRegister' => Route::has('register'),
     ]);
@@ -28,6 +28,7 @@ Route::middleware('guest')->group(function () {
 
 // Защищенные маршруты (Auth)
 Route::middleware('auth')->group(function () {
+    //Route::redirect('/', '/game');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 
     Route::get('/game', [GameController::class, 'index'])->name('game.index');
