@@ -24,6 +24,7 @@ const userBuffs = ref(props.user.equipped_buffs || { shield: { count: 0 }, invis
 let renderer = null;
 let animationFrameId = null;
 let inputInterval = null;
+let pollInterval = null;
 let currentAngle = 0;
 let lastRenderTime = performance.now();
 const touchOptions = { passive: false };
@@ -32,14 +33,54 @@ const logout = () => {
     router.post('/logout');
 };
 
-const buyCoins = async () => {
+// Открытие оплаты в НОВОМ окне с выбором стратегического метода
+const buyCoins = async (gateway = 'yookassa') => {
+    // Предварительно открываем пустую вкладку, чтобы браузер не заблокировал Popup
+    const paymentWindow = window.open('about:blank', '_blank');
+
     try {
-        const response = await axios.post('/api/payments/create', { amount: 100 });
-        if (response.data.payment_url) {
-            window.location.href = response.data.payment_url;
+        const response = await axios.post('/api/payments/create', {
+            amount: 100,
+            gateway: gateway
+        });
+
+        if (response.data.payment_url && paymentWindow) {
+            paymentWindow.location.href = response.data.payment_url;
+            startPaymentPolling(response.data.transaction_id);
         }
     } catch (e) {
+        if (paymentWindow) paymentWindow.close();
         alert('Ошибка создания платежа: ' + (e.response?.data?.message || 'Попробуйте позже'));
+    }
+};
+
+const startPaymentPolling = (transactionId) => {
+    if (pollInterval) clearInterval(pollInterval);
+
+    pollInterval = setInterval(async () => {
+        try {
+            const res = await axios.get(`/api/payments/${transactionId}/status`);
+            if (res.data.status === 'succeeded') {
+                clearInterval(pollInterval);
+                userCoins.value = res.data.coins;
+                alert('Оплата успешно проведена! Монеты зачислены.');
+            } else if (res.data.status === 'canceled') {
+                clearInterval(pollInterval);
+                alert('Платеж был отменен.');
+            }
+        } catch (e) {
+            console.error('Ошибка проверки статуса платежа:', e);
+        }
+    }, 2000);
+};
+
+const handleWindowMessage = (event) => {
+    if (event.data?.type === 'PAYMENT_COMPLETED' && event.data?.transactionId) {
+        axios.get(`/api/payments/${event.data.transactionId}/status`).then((res) => {
+            if (res.data.coins !== undefined) {
+                userCoins.value = res.data.coins;
+            }
+        });
     }
 };
 
@@ -73,7 +114,6 @@ const leaderboard = computed(() => {
         .slice(0, 10);
 });
 
-// Исправлено: поддержка как стандартного, так и сжатого формата от сервера (s.i ?? s.id)
 const mySnake = computed(() => {
     if (!currentSnakeId.value) return null;
     return activeSnakes.value.find(s => String(s.i ?? s.id) === String(currentSnakeId.value));
@@ -198,6 +238,7 @@ onMounted(() => {
     window.addEventListener('touchmove', handleTouchMove, touchOptions);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('message', handleWindowMessage);
 
     renderer = new GameRenderer(canvasRef.value);
 
@@ -247,11 +288,12 @@ onUnmounted(() => {
     window.removeEventListener('touchmove', handleTouchMove, touchOptions);
     window.removeEventListener('keydown', handleKeyDown);
     window.removeEventListener('keyup', handleKeyUp);
+    window.removeEventListener('message', handleWindowMessage);
 
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
     if (inputInterval) clearInterval(inputInterval);
+    if (pollInterval) clearInterval(pollInterval);
 
-    // Исправлено: использование Echo.leave() вместо отсутствующего Echo.leaveChannel()
     if (window.Echo) {
         window.Echo.leave('game.world');
         window.Echo.leave('private-game.input');
@@ -277,10 +319,10 @@ onUnmounted(() => {
                         <span class="text-lg font-black text-amber-400 font-mono">{{ userCoins }} 🪙</span>
                     </div>
                     <button
-                        @click="buyCoins"
+                        @click="buyCoins('yookassa')"
                         class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition transform active:scale-95 shadow-md shadow-emerald-600/30"
                     >
-                        +100₽
+                        +100₽ (ЮKassa)
                     </button>
                 </div>
 

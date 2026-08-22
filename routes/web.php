@@ -4,6 +4,8 @@ use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\Auth\TelegramAuthController;
 use App\Http\Controllers\GameController;
+use App\Http\Controllers\PaymentController;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -28,9 +30,11 @@ Route::middleware('guest')->group(function () {
 
 // Защищенные маршруты (Auth)
 Route::middleware('auth')->group(function () {
-    //Route::redirect('/', '/game');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
 
     Route::get('/game', [GameController::class, 'index'])->name('game.index');
     Route::post('/game/spawn', [GameController::class, 'spawn'])->name('game.spawn');
+
+    // Callback редирект ЮKassa (Inertia рендер)
+    Route::get('/payments/callback/{transaction}', [PaymentController::class, 'callback'])->name('payments.callback');
 });
